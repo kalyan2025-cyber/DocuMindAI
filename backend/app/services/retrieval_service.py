@@ -1,10 +1,12 @@
+
 import re
 from typing import Any
+
+from bson import ObjectId
 
 from app.db.mongo import db
 
 
-# Common words that usually do not help identify relevant passages.
 STOP_WORDS = {
     "a", "an", "the", "is", "are", "was", "were",
     "what", "when", "where", "who", "how", "why",
@@ -27,19 +29,8 @@ def retrieve_chunks(
     tenant_id: str,
     top_k: int = 4,
 ) -> list[dict[str, Any]]:
-    """
-    Retrieve relevant document chunks for a question.
+    """Retrieve relevant chunks with document filenames."""
 
-    Expected MongoDB fields:
-        document_id
-        tenant_id
-        chunk_index
-        text
-
-    Returns chunks sorted by keyword relevance.
-    """
-
-    # Validate input.
     if not question or not question.strip():
         return []
 
@@ -50,18 +41,34 @@ def retrieve_chunks(
         return []
 
     query_words = set(tokenize(question))
-
     if not query_words:
         return []
 
-    # Restrict the search to the selected documents
-    # belonging to the specified tenant.
-    collection = db["document_chunks"]
+    chunks_collection = db["document_chunks"]
+    documents_collection = db["documents"]
 
-    cursor = collection.find({
+    # Only search selected documents belonging to this tenant.
+    cursor = chunks_collection.find({
         "tenant_id": tenant_id,
         "document_id": {"$in": document_ids},
     })
+
+    # Fetch metadata for the selected documents in one query.
+    document_metadata = {}
+
+    metadata_cursor = documents_collection.find({
+        "_id": {
+            "$in": [
+                ObjectId(document_id)
+                for document_id in document_ids
+                if ObjectId.is_valid(document_id)
+            ]
+        },
+        "tenant_id": tenant_id,
+    })
+
+    for document in metadata_cursor:
+        document_metadata[str(document["_id"])] = document
 
     results = []
 
@@ -71,28 +78,35 @@ def retrieve_chunks(
         if not isinstance(text, str) or not text.strip():
             continue
 
+        document_id = str(chunk.get("document_id", ""))
+        document = document_metadata.get(document_id)
+
+        # Ignore orphaned chunks or documents outside this tenant.
+        if not document:
+            continue
+
         chunk_words = set(tokenize(text))
         matched_words = query_words.intersection(chunk_words)
 
         if not matched_words:
             continue
 
-        # Score = proportion of question keywords found
-        # in the document chunk.
         score = len(matched_words) / len(query_words)
 
         results.append({
-            "document_id": str(chunk["document_id"]),
+            "document_id": document_id,
+            "filename": document.get(
+                "filename",
+                "Unknown document",
+            ),
             "chunk_index": chunk.get("chunk_index", 0),
             "text": text,
             "score": round(score, 4),
         })
 
-    # Highest relevance first.
     results.sort(
         key=lambda item: item["score"],
         reverse=True,
     )
 
-    # Return at most 10 chunks; default is 4.
     return results[:min(top_k, 10)]
