@@ -23,3 +23,6 @@ CHUNK_SIZE = 1000
 CHUNK_OVERLAP = 150
 
 ALLOWED_EXTENSIONS = {".pdf", ".txt"}
+
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "").strip()
+GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-2.5-flash")
